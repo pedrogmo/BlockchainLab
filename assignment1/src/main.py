@@ -1,5 +1,6 @@
 import hashlib
 import struct
+import sys
 from asyncio import Event, run, sleep
 from dataclasses import dataclass
 
@@ -8,14 +9,13 @@ from ipv8.configuration import ConfigBuilder, Strategy, WalkerDefinition, defaul
 from ipv8.lazy_community import lazy_wrapper
 from ipv8.messaging.payload_dataclass import DataClassPayload
 from ipv8.peer import Peer
+from ipv8.peerdiscovery.network import PeerObserver
 from ipv8.util import run_forever
 from ipv8_service import IPv8
 
 COMMUNITY_ID = bytes.fromhex("2c1cc6e35ff484f99ebdfb6108477783c0102881")
 SERVER_PUBLIC_KEY = bytes.fromhex(
-    "4c69624e61434c504b3a86b23934a28d669c390e2d1fc0b0870706c4591cc0cb"
-    "178bc5a811da6d87d27ef319b2638ef60cc8d119724f4c53a1ebfad919c3ac41"
-    "36c501ce5c09364e0ebb"
+    "4c69624e61434c504b3a86b23934a28d669c390e2d1fc0b0870706c4591cc0cb178bc5a811da6d87d27ef319b2638ef60cc8d119724f4c53a1ebfad919c3ac4136c501ce5c09364e0ebb"
 )
 EMAIL = "pgomesmoreira@tudelft.nl"
 GITHUB_URL = "https://github.com/pedrogmo/BlockchainLab"
@@ -72,8 +72,7 @@ def mine_nonce(email: str, github_url: str, difficulty: int) -> int:
 
         nonce += 1
 
-
-class LabCommunity(Community):
+class LabCommunity(Community, PeerObserver):
     community_id = COMMUNITY_ID
 
     def __init__(self, settings: CommunitySettings) -> None:
@@ -81,38 +80,28 @@ class LabCommunity(Community):
         self.add_message_handler(ResponsePayload, self.on_response)
         self.email = settings.email
         self.github_url = settings.github_url
-        self.response_event = Event()
-        self.response_received = None
 
-    def started(self) -> None:
-        """Called when the community is started. Discovers server, mines PoW, submits."""
+    def on_peer_added(self, peer: Peer) -> None:
+        print("I am:", self.my_peer, "I found:", peer)
 
-        async def find_server_and_submit() -> None:
-            # 1. Search peers for server by matching public key
-
-            server = None
-            for _ in range(120):
-                for peer in self.get_peers():
-                    if peer.public_key.key_to_bin() == SERVER_PUBLIC_KEY:
-                        server = peer
-                        break
-                if server is not None:
-                    break
-                await sleep(5.0)
-            if server is None:
-                raise RuntimeError("Could not find server after 10 minutes")
-
+        # 1. Search peers for server by matching public key
+        if peer.public_key.key_to_bin() == SERVER_PUBLIC_KEY:
+            print("Found the server")
             # 2. Mine a valid nonce for (email, github_url)
             nonce = mine_nonce(self.email, self.github_url, DIFFICULTY)
 
             # 3. Send SubmissionPayload to server via ez_send
             payload = SubmissionPayload(self.email, self.github_url, nonce)
-            self.ez_send(server, payload)
+            self.ez_send(peer, payload)
 
             # 4. Wait for response event
-            await self.response_event.wait()
+            # self.response_event.wait()
 
-        self.register_task("submit", find_server_and_submit, delay=2.0)
+    def on_peer_removed(self, peer: Peer) -> None:
+        pass
+
+    def started(self) -> None:
+        self.network.add_peer_observer(self)
 
     @lazy_wrapper(ResponsePayload)
     def on_response(self, peer: Peer, payload: ResponsePayload) -> None:
@@ -124,11 +113,10 @@ class LabCommunity(Community):
         else:
             print("Server REJECTED the submission")
 
-        self.response_received = (payload.success, payload.message)
-        self.response_event.set()
+        sys.exit(0)
 
 
-async def start() -> None:
+async def start_community() -> None:
     builder = ConfigBuilder().clear_keys().clear_overlays()
     builder.add_key("my peer", "curve25519", "ec.pem")
     builder.add_overlay(
@@ -147,4 +135,5 @@ async def start() -> None:
     await run_forever()
 
 
-run(start())
+
+run(start_community())
