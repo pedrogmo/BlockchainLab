@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from ipv8.community import Community, CommunitySettings
 from ipv8.configuration import ConfigBuilder, Strategy, WalkerDefinition, default_bootstrap_defs
 from ipv8.lazy_community import lazy_wrapper
-from ipv8.messaging.payload_dataclass import DataClassPayload
+from ipv8.messaging.payload_dataclass import DataClassPayload, type_from_format
 from ipv8.peer import Peer
 from ipv8.peerdiscovery.network import PeerObserver
 from ipv8.util import run_forever
@@ -16,10 +16,13 @@ from ipv8_service import IPv8
 COMMUNITY_ID = bytes.fromhex("2c1cc6e35ff484f99ebdfb6108477783c0102881")
 SERVER_PUBLIC_KEY = bytes.fromhex(
     "4c69624e61434c504b3a86b23934a28d669c390e2d1fc0b0870706c4591cc0cb178bc5a811da6d87d27ef319b2638ef60cc8d119724f4c53a1ebfad919c3ac4136c501ce5c09364e0ebb"
+    # "4c69624e61434c504b3ae822fef1a3397d5e97c341e6770a15a5be0e93629920dc9fd84d72beb961a91a34ceefff29e4f65e52cd1a41c66486da6b749c70c947389601970582f802ab04"
 )
 EMAIL = "pgomesmoreira@tudelft.nl"
 GITHUB_URL = "https://github.com/pedrogmo/BlockchainLab"
 DIFFICULTY = 28
+
+varlenHutf8 = type_from_format("varlenHutf8")
 
 @dataclass
 class SubmissionPayload(DataClassPayload[1]):
@@ -78,24 +81,14 @@ class LabCommunity(Community, PeerObserver):
     def __init__(self, settings: CommunitySettings) -> None:
         super().__init__(settings)
         self.add_message_handler(ResponsePayload, self.on_response)
+        self.add_message_handler(SubmissionPayload, self.on_response_submission)
+
         self.email = settings.email
         self.github_url = settings.github_url
 
     def on_peer_added(self, peer: Peer) -> None:
         print("I am:", self.my_peer, "I found:", peer)
-
-        # 1. Search peers for server by matching public key
-        if peer.public_key.key_to_bin() == SERVER_PUBLIC_KEY:
-            print("Found the server")
-            # 2. Mine a valid nonce for (email, github_url)
-            nonce = mine_nonce(self.email, self.github_url, DIFFICULTY)
-
-            # 3. Send SubmissionPayload to server via ez_send
-            payload = SubmissionPayload(self.email, self.github_url, nonce)
-            self.ez_send(peer, payload)
-
-            # 4. Wait for response event
-            # self.response_event.wait()
+        print(f"Their key is {peer.public_key.key_to_bin().hex()}")
 
     def on_peer_removed(self, peer: Peer) -> None:
         pass
@@ -103,17 +96,39 @@ class LabCommunity(Community, PeerObserver):
     def started(self) -> None:
         self.network.add_peer_observer(self)
 
+        self.register_task("find_server", self.find_server, delay=5.0, interval=10.0)
+
+    def find_server(self):
+        print("Trying to find server...")
+        # 1. Search peers for server by matching public key
+        for peer in self.get_peers():
+            print(f"Peer {peer}")
+            if peer.public_key.key_to_bin() == SERVER_PUBLIC_KEY:
+                print("Found the server")
+                # 2. Mine a valid nonce for (email, github_url)
+                nonce = mine_nonce(self.email, self.github_url, DIFFICULTY)
+
+                # 3. Send SubmissionPayload to server via ez_send
+                payload = SubmissionPayload(self.email, self.github_url, nonce)
+                self.ez_send(peer, payload)
+
     @lazy_wrapper(ResponsePayload)
     def on_response(self, peer: Peer, payload: ResponsePayload) -> None:
         """Handle server response (message_id=2)."""
-        print(payload)
+        if peer.public_key.key_to_bin() == SERVER_PUBLIC_KEY:
+            print(payload)
 
-        if payload.success:
-            print("Server ACCEPTED the submission")
-        else:
-            print("Server REJECTED the submission")
+            if payload.success:
+                print("Server ACCEPTED the submission")
+            else:
+                print("Server REJECTED the submission")
 
-        sys.exit(0)
+            sys.exit(0)
+
+    @lazy_wrapper(SubmissionPayload)
+    def on_response_submission(self, peer: Peer, payload: ResponsePayload) -> None:
+        """Handle server response (message_id=1)."""
+        print(f"Got submission from peer {peer}: \n{payload}")
 
 
 async def start_community() -> None:
@@ -137,3 +152,4 @@ async def start_community() -> None:
 
 
 run(start_community())
+
