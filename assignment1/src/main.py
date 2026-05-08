@@ -98,6 +98,9 @@ class LabCommunity(Community, PeerObserver):
 
         self.register_task("find_server", self.find_server, delay=5.0, interval=10.0)
 
+        print("MY KEY")
+        print(self.my_peer.public_key.key_to_bin().hex())
+
     def find_server(self):
         print("Trying to find server...")
         # 1. Search peers for server by matching public key
@@ -133,10 +136,10 @@ class LabCommunity(Community, PeerObserver):
 
 async def start_community() -> None:
     builder = ConfigBuilder().clear_keys().clear_overlays()
-    builder.add_key("my peer", "curve25519", "ec.pem")
+    builder.add_key(EMAIL, "curve25519", "pedro.pem")
     builder.add_overlay(
         "LabCommunity",
-        "my peer",
+        EMAIL,
         [WalkerDefinition(Strategy.RandomWalk, 10, {"timeout": 3.0})],
         default_bootstrap_defs,
         {
@@ -152,4 +155,3 @@ async def start_community() -> None:
 
 
 run(start_community())
-
